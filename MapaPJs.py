@@ -106,7 +106,7 @@ st.markdown("Utilize os filtros na barra lateral para encontrar técnicos por lo
 # --- DEFINIÇÃO DO CAMINHO DO ARQUIVO ---
 # Certifique-se de que este nome é EXATAMENTE igual ao nome do seu arquivo CSV
 # incluindo maiúsculas/minúsculas, espaços e acentos.
-FILE_NAME = './[AT]TécnicosTerceirosMapa.csv'
+FILE_NAME = '[AT]TécnicosTerceirosMapa.csv'
 
 # Constrói o caminho absoluto para o arquivo, assumindo que ele está no mesmo diretório do script
 # Isso é mais robusto, especialmente para deploy.
