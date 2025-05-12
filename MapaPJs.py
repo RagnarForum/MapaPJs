@@ -7,6 +7,7 @@ from geopy.extra.rate_limiter import RateLimiter
 import time
 import re
 import os # <<< ADICIONE ESTA LINHA NO INÍCIO DO SEU SCRIPT
+from folium import plugins
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -277,6 +278,9 @@ m = folium.Map(
     attr='Tiles © Esri — National Geographic, Esri, DeLorme, NAVTEQ, UNEP-WCMC, USGS, NASA, ESA, METI, NRCAN, GEBCO, NOAA, iPC' if selected_tile == "Esri_NatGeoWorldMap" else None,
     control_scale=True
 )
+minimap = plugins.MiniMap()
+m.add_child(minimap)
+
 
 for idx, row in df_map.iterrows():
     tooltip_text = f"{row['Nome']} ({row['Cidade']})"
