@@ -275,7 +275,7 @@ m = folium.Map(
     location=current_map_center,
     zoom_start=current_zoom,
     tiles=selected_tile,
-    attr='Tiles © Esri — National Geographic, Esri, DeLorme, NAVTEQ, UNEP-WCMC, USGS, NASA, ESA, METI, NRCAN, GEBCO, NOAA, iPC' if selected_tile == "Esri_NatGeoWorldMap" else None,
+#    attr='Tiles © Esri — National Geographic, Esri, DeLorme, NAVTEQ, UNEP-WCMC, USGS, NASA, ESA, METI, NRCAN, GEBCO, NOAA, iPC' if selected_tile == "Esri_NatGeoWorldMap" else None,
     control_scale=True
 )
 minimap = plugins.MiniMap()
