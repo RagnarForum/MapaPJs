@@ -5,17 +5,17 @@ from streamlit_folium import st_folium
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
 import time
-import re # Import regular expressions
+import re
 
 # --- Page Configuration ---
 st.set_page_config(
-    page_title="Mapa de Técnicos Terceirizados",
-    page_icon=" Mago::globe_with_meridians:",
+    page_title="Mago: Mapa de Técnicos",
+    page_icon=" Mago::globe_with_meridians:", # Use um emoji ou ícone simples se "Mago" não for um ícone padrão
     layout="wide"
 )
 
 # --- Data Loading and Caching ---
-@st.cache_data # Cache the data loading and processing
+@st.cache_data
 def load_data(file_path):
     try:
         df = pd.read_csv(file_path, encoding='utf-8')
@@ -24,82 +24,67 @@ def load_data(file_path):
             df = pd.read_csv(file_path, encoding='latin1')
         except Exception as e:
             st.error(f"Erro ao ler o CSV: {e}")
-            return pd.DataFrame() # Return empty dataframe on error
+            return pd.DataFrame()
 
-    # Clean column names (remove leading/trailing spaces)
     df.columns = df.columns.str.strip()
-
-    # Fill NaN values in expertise columns with empty strings for easier processing
     expertise_cols = ['Mecânica', 'Elétrica', 'Eletrônica', 'Processo']
     for col in expertise_cols:
         if col in df.columns:
             df[col] = df[col].fillna('')
         else:
             st.warning(f"Coluna '{col}' não encontrada no arquivo CSV.")
-            df[col] = '' # Add column if missing
+            df[col] = ''
 
-    # Combine city and state for geocoding robustness
     df['EnderecoCompleto'] = df['Cidade'].fillna('') + ', ' + df['UF'].fillna('')
-    df['EnderecoCompleto'] = df['EnderecoCompleto'].str.strip(', ') # Clean up if city or UF is missing
-
+    df['EnderecoCompleto'] = df['EnderecoCompleto'].str.strip(', ')
     return df
 
 # --- Geocoding Function with Caching and Rate Limiting ---
-# Initialize geolocator
-geolocator = Nominatim(user_agent="technician_mapper_app_" + str(time.time())) # Unique user agent
-geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.1, error_wait_seconds=5.0) # Respect Nominatim usage policy
+geolocator = Nominatim(user_agent="technician_mapper_app_" + str(time.time()) + "_v2")
+geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.1, error_wait_seconds=10.0, max_retries=2)
 
-@st.cache_data # Cache geocoding results
+@st.cache_data
 def get_coordinates(address):
     if not address or pd.isna(address):
         return None, None
     try:
-        location = geocode(address)
+        location = geocode(address, timeout=10) # Adicionado timeout
         if location:
             return location.latitude, location.longitude
         else:
-            # Try geocoding just the state if full address fails (basic fallback)
-            state = address.split(',')[-1].strip()
-            if state != address: # Avoid infinite loop if only state was provided
-                location_state = geocode(state)
+            state_search = address.split(',')[-1].strip()
+            if state_search and state_search != address: # Evita geocodificar o mesmo se já for só o estado
+                # st.sidebar.caption(f"Tentando geolocalizar apenas estado para: {address}")
+                location_state = geocode(state_search, timeout=10)
                 if location_state:
-                     # Return state coords but log warning
-                     # st.sidebar.warning(f"Não foi possível localizar '{address}'. Usando coordenadas do estado '{state}'.")
-                     return location_state.latitude, location_state.longitude
-            return None, None # Failed
+                    return location_state.latitude, location_state.longitude
+            return None, None
     except Exception as e:
-        # st.sidebar.error(f"Erro de geocodificação para '{address}': {e}")
+        # st.sidebar.caption(f"Geocoding error for '{address}': {e}") # Mais discreto
         return None, None
 
 # --- Helper Functions for Parsing Expertise ---
 def parse_expertise(text):
-    """Parses the expertise string into categories and machines."""
     if not isinstance(text, str) or not text.strip():
-        return {}, [] # Return empty dict and list if input is not valid string
-
+        return {}, []
     categories = {}
     all_machines_in_cell = []
     current_category = None
     lines = text.strip().split('\n')
-
     for line in lines:
         line = line.strip()
-        if not line:
-            continue
+        if not line: continue
         if line.startswith('»'):
             current_category = line[1:].strip()
             categories[current_category] = []
         elif current_category:
-            # Split machines by comma, strip whitespace
             machines = [m.strip() for m in line.split(',') if m.strip()]
             categories[current_category].extend(machines)
             all_machines_in_cell.extend(machines)
-
-    return categories, list(set(all_machines_in_cell)) # Return unique machines for the cell
+    return categories, list(set(all_machines_in_cell))
 
 @st.cache_data
 def get_all_unique_items(df, expertise_cols):
-    """Gets all unique categories and machines from the expertise columns."""
     all_categories = set()
     all_machines = set()
     for col in expertise_cols:
@@ -114,47 +99,32 @@ def get_all_unique_items(df, expertise_cols):
 st.title(" Mago: Mapeamento e Consulta de Técnicos Parceiros")
 st.markdown("Utilize os filtros na barra lateral para encontrar técnicos por localização ou especialidade.")
 
-# Load data
-file_path = './[AT]TécnicosTerceirosMapa.csv'
+file_path = './[AT]TécnicosTerceirosMapa.csv'
 df_original = load_data(file_path)
 
 if df_original.empty:
-    st.stop() # Stop execution if data loading failed
+    st.stop()
 
 # --- Sidebar Filters ---
 st.sidebar.header("Filtros")
-
-# Get unique values for filters
 states = sorted(df_original['UF'].dropna().unique())
 all_expertise_areas = ['Mecânica', 'Elétrica', 'Eletrônica', 'Processo']
 all_categories, all_machines = get_all_unique_items(df_original, all_expertise_areas)
 
-# State filter
 selected_states = st.sidebar.multiselect("Estado (UF):", options=states, default=[])
-
-# City filter (dynamic based on state)
 if selected_states:
     available_cities = sorted(df_original[df_original['UF'].isin(selected_states)]['Cidade'].dropna().unique())
 else:
     available_cities = sorted(df_original['Cidade'].dropna().unique())
 selected_cities = st.sidebar.multiselect("Cidade:", options=available_cities, default=[])
-
-# Technician Name filter
 technician_names = sorted(df_original['Nome'].dropna().unique())
 selected_name = st.sidebar.selectbox("Nome do Técnico:", options=["Todos"] + technician_names, index=0)
-
-# Expertise Area filter
 selected_area = st.sidebar.selectbox("Área de Atuação:", options=["Todas"] + all_expertise_areas, index=0)
-
-# Machine Category filter
 selected_category = st.sidebar.selectbox("Categoria de Máquina:", options=["Todas"] + all_categories, index=0)
-
-# Specific Machine filter
 selected_machine = st.sidebar.selectbox("Máquina Específica:", options=["Todas"] + all_machines, index=0)
 
 # --- Filtering Data ---
 df_filtered = df_original.copy()
-
 if selected_states:
     df_filtered = df_filtered[df_filtered['UF'].isin(selected_states)]
 if selected_cities:
@@ -162,7 +132,6 @@ if selected_cities:
 if selected_name != "Todos":
     df_filtered = df_filtered[df_filtered['Nome'] == selected_name]
 
-# Function to check if expertise matches filters
 def check_expertise(row, area, category, machine):
     expertise_cols_to_check = all_expertise_areas if area == "Todas" else [area]
     match_found = False
@@ -170,161 +139,188 @@ def check_expertise(row, area, category, machine):
 
     for col_name in expertise_cols_to_check:
         if col_name in row and pd.notna(row[col_name]) and row[col_name].strip():
-            text = row[col_name]
-            full_text_for_tooltip.append(f"**{col_name}:**\n{text}") # Add formatted text for tooltip
+            text = str(row[col_name]) # Garantir que é string
+            full_text_for_tooltip.append(f"**{col_name}:**\n{text}")
 
-            # If only area is selected, any content in that area is a match
             if area != "Todas" and category == "Todas" and machine == "Todas":
-                 match_found = True
-                 continue # Check next area if needed (though loop is constrained by selected_area)
+                match_found = True
+                continue
 
-            # Check category and machine within this area's text
             cat_match = (category == "Todas") or (f"»{category}" in text)
-            # Use regex for machine search to handle variations and word boundaries potentially
             machine_match = (machine == "Todas") or bool(re.search(r'(?<!\w)' + re.escape(machine) + r'(?!\w)', text, re.IGNORECASE))
 
             if cat_match and machine_match:
-                 # If area filter is 'Todas', finding a match in *any* area is enough
-                 if area == "Todas":
+                if area == "Todas":
                     match_found = True
-                    # Don't break here if area is 'Todas', need to collect all tooltips
-                 # If a specific area is selected, only a match in *that* area counts
-                 elif col_name == area:
+                elif col_name == area:
                     match_found = True
-                    break # Found match in the specific area, no need to check others
-
-    # If the area filter was 'Todas' and no specific cat/machine was selected,
-    # the simple existence check (area column not empty) should suffice.
+                    break
+    
     if area == "Todas" and category == "Todas" and machine == "Todas":
-        match_found = any(pd.notna(row[col]) and row[col].strip() for col in expertise_cols_to_check if col in row)
-
+        match_found = any(pd.notna(row[col]) and str(row[col]).strip() for col in expertise_cols_to_check if col in row)
 
     tooltip_content = "\n\n".join(full_text_for_tooltip) if full_text_for_tooltip else "Nenhuma especialidade detalhada."
     return pd.Series([match_found, tooltip_content])
 
-
-# Apply expertise filters only if they are selected (not 'Todas')
 if selected_area != "Todas" or selected_category != "Todas" or selected_machine != "Todas":
-     # Apply the check_expertise function row-wise
-     expertise_check_results = df_filtered.apply(
-         lambda row: check_expertise(row, selected_area, selected_category, selected_machine),
-         axis=1
-     )
-     # Assign the results back to the DataFrame (temporarily)
-     df_filtered[['match', 'tooltip_info']] = expertise_check_results
-     # Keep only rows that matched
-     df_filtered = df_filtered[df_filtered['match'] == True]
+    expertise_check_results = df_filtered.apply(
+        lambda row: check_expertise(row, selected_area, selected_category, selected_machine),
+        axis=1
+    )
+    df_filtered[['match', 'tooltip_info']] = expertise_check_results
+    df_filtered = df_filtered[df_filtered['match'] == True].drop(columns=['match']) # Remove a coluna 'match' após filtrar
 else:
-    # If no expertise filter is applied, generate tooltip info for all rows in df_filtered
     df_filtered['tooltip_info'] = df_filtered.apply(
-        lambda row: "\n\n".join([f"**{col}:**\n{row[col]}" for col in all_expertise_areas if col in row and pd.notna(row[col]) and row[col].strip()] or ["Nenhuma especialidade detalhada."]),
+        lambda row: "\n\n".join([f"**{col}:**\n{str(row[col])}" for col in all_expertise_areas if col in row and pd.notna(row[col]) and str(row[col]).strip()] or ["Nenhuma especialidade detalhada."]),
         axis=1
     )
 
-
 # --- Geocode Filtered Data ---
-# Check if coordinates already exist to avoid re-running
 if 'Latitude' not in df_filtered.columns or 'Longitude' not in df_filtered.columns:
-    df_filtered[['Latitude', 'Longitude']] = None # Initialize columns if they don't exist
+    df_filtered['Latitude'] = pd.NA
+    df_filtered['Longitude'] = pd.NA
 
-# Apply geocoding only to rows that don't have valid coordinates yet and have an address
-rows_to_geocode = df_filtered[
-    (df_filtered['Latitude'].isna() | df_filtered['Longitude'].isna()) &
-    df_filtered['EnderecoCompleto'].notna() &
-    (df_filtered['EnderecoCompleto'] != '')
-].index
+# Convert to numeric, coercing errors to NaT/NaN, then check for actual NaNs
+df_filtered['Latitude'] = pd.to_numeric(df_filtered['Latitude'], errors='coerce')
+df_filtered['Longitude'] = pd.to_numeric(df_filtered['Longitude'], errors='coerce')
 
-if not rows_to_geocode.empty:
-    st.info(f"Geocodificando {len(rows_to_geocode)} endereços... Isso pode levar um tempo.")
+rows_to_geocode_mask = (df_filtered['Latitude'].isna() | df_filtered['Longitude'].isna()) & \
+                       df_filtered['EnderecoCompleto'].notna() & \
+                       (df_filtered['EnderecoCompleto'] != '')
+rows_to_geocode_indices = df_filtered[rows_to_geocode_mask].index
+
+if not rows_to_geocode_indices.empty:
+    st.info(f"Geocodificando {len(rows_to_geocode_indices)} novos endereços... Isso pode levar um tempo.")
     progress_bar = st.progress(0)
-    total_rows = len(rows_to_geocode)
+    
+    coordinates_lat = {}
+    coordinates_lon = {}
 
-    coordinates = {}
-    for i, idx in enumerate(rows_to_geocode):
+    for i, idx in enumerate(rows_to_geocode_indices):
         address = df_filtered.loc[idx, 'EnderecoCompleto']
         lat, lon = get_coordinates(address)
-        coordinates[idx] = (lat, lon)
-        # Update progress bar
-        progress_bar.progress((i + 1) / total_rows)
+        if lat is not None and lon is not None:
+            coordinates_lat[idx] = lat
+            coordinates_lon[idx] = lon
+        else: # Store NaN if geocoding fails
+             coordinates_lat[idx] = pd.NA
+             coordinates_lon[idx] = pd.NA
+        progress_bar.progress((i + 1) / len(rows_to_geocode_indices))
+    
+    # Update DataFrame
+    df_filtered.loc[coordinates_lat.keys(), 'Latitude'] = pd.Series(coordinates_lat)
+    df_filtered.loc[coordinates_lon.keys(), 'Longitude'] = pd.Series(coordinates_lon)
+    
+    # Persist these new coordinates back to the original dataframe in memory for caching
+    # This part can be tricky if df_original is deeply cached and not mutable directly
+    # For simplicity here, we assume df_original is the one being updated through df_filtered's lifecycle
+    # A more robust solution for full persistence across sessions would involve saving to a file.
+    df_original.update(df_filtered[['Latitude', 'Longitude']])
 
-    # Update DataFrame efficiently
-    lat_updates = {idx: coord[0] for idx, coord in coordinates.items()}
-    lon_updates = {idx: coord[1] for idx, coord in coordinates.items()}
-    df_filtered['Latitude'].update(pd.Series(lat_updates))
-    df_filtered['Longitude'].update(pd.Series(lon_updates))
 
-    progress_bar.empty() # Remove progress bar after completion
-
+    progress_bar.empty()
 
 # --- Display Map ---
 st.subheader("Mapa de Técnicos")
 
-# Create map centered roughly on Brazil or based on filtered data
-map_center = [-14.2350, -51.9253] # Center of Brazil
-zoom_start = 4
+# Brazil bounding box (approximate)
+# SW corner: (-33.75158, -73.98283) - Southernmost point of RS, Westernmost point of AC
+# NE corner: (5.27189, -28.84376) - Northernmost point of RR, Easternmost point of PB (Ponta do Seixas is actually -34.79, but for tiles -28 is fine)
+brazil_bounds = [
+    [-33.75, -73.99],  # Southwest
+    [5.28, -34.70]     # Northeast
+]
 
-# Filter out rows without valid coordinates for mapping
+# Initial map center and zoom
+map_center_br = [-14.2350, -51.9253] # Center of Brazil
+zoom_start_br = 4 # Good zoom level to see most of Brazil
+
 df_map = df_filtered.dropna(subset=['Latitude', 'Longitude'])
 
+current_map_center = map_center_br
+current_zoom = zoom_start_br
+
 if not df_map.empty:
-    # Adjust map center and zoom based on data points
-    map_center = [df_map['Latitude'].mean(), df_map['Longitude'].mean()]
-    # Adjust zoom based on the spread of points (simple approach)
-    lat_range = df_map['Latitude'].max() - df_map['Latitude'].min()
-    lon_range = df_map['Longitude'].max() - df_map['Longitude'].min()
-    if lat_range < 2 and lon_range < 2 :
-        zoom_start = 10
-    elif lat_range < 10 and lon_range < 10:
-        zoom_start = 6
+    # If there are filtered points, center on them
+    current_map_center = [df_map['Latitude'].mean(), df_map['Longitude'].mean()]
+    # Simple zoom adjustment based on point spread
+    lat_std = df_map['Latitude'].std()
+    lon_std = df_map['Longitude'].std()
+    if pd.notna(lat_std) and pd.notna(lon_std) and lat_std < 0.5 and lon_std < 0.5 and len(df_map) == 1: # Very focused on one point
+        current_zoom = 12
+    elif pd.notna(lat_std) and pd.notna(lon_std) and lat_std < 2 and lon_std < 2: # Moderately focused
+        current_zoom = 7
+    elif pd.notna(lat_std) and pd.notna(lon_std) and lat_std < 5 and lon_std < 5:
+        current_zoom = 5
     else:
-        zoom_start = 4
+        current_zoom = zoom_start_br # Default back to Brazil view if points are very spread out
 
+# --- Choose your map theme here ---
+# Options:
+# "OpenStreetMap"
+# "CartoDB positron" (clean, good for data overlays)
+# "CartoDB dark_matter" (dark theme)
+# "Stamen Terrain" (shows topography)
+# "Stamen Toner" (high contrast B&W)
+# "Esri_WorldImagery" (satellite)
+# "Esri_NatGeoWorldMap" (National Geographic style - recommended for attractive & informative)
+selected_tile = "Esri_NatGeoWorldMap"
+# selected_tile = "Stamen Terrain" # Alternative good option
 
-m = folium.Map(location=map_center, zoom_start=zoom_start, tiles="CartoDB positron")
+m = folium.Map(
+    location=current_map_center,
+    zoom_start=current_zoom,
+    tiles=selected_tile,
+    attr='Tiles © Esri — National Geographic, Esri, DeLorme, NAVTEQ, UNEP-WCMC, USGS, NASA, ESA, METI, NRCAN, GEBCO, NOAA, iPC' if selected_tile == "Esri_NatGeoWorldMap" else None, # Add attribution if needed
+    # max_bounds=brazil_bounds, # Restrict panning (can be slightly improved with precise bounds)
+    # min_zoom=3, # Prevent zooming out too far
+    control_scale=True # Adds a scale bar
+)
 
-# Add markers to the map
+# Optional: If you want to strictly keep the map within Brazil bounds
+# m.fit_bounds(brazil_bounds) # This will zoom to fit the bounds
+
 for idx, row in df_map.iterrows():
-    # Prepare popup content (HTML for basic formatting)
+    tooltip_text = f"{row['Nome']} ({row['Cidade']})"
     popup_html = f"""
-    <b>Nome:</b> {row['Nome']}<br>
-    <b>Empresa:</b> {row['Empresa']}<br>
-    <b>Local:</b> {row['Cidade']}, {row['UF']}<br>
-    <hr>
-    <b>Especialidades Filtradas/Todas:</b><br>
-    <pre style="white-space: pre-wrap; word-wrap: break-word; max-height: 200px; overflow-y: auto;">{row.get('tooltip_info', 'N/A').replace('**','<b>').replace('**','</b>').replace('\\n','<br>')}</pre>
+    <div style="font-family: Arial, sans-serif; font-size: 13px;">
+    <strong>Nome:</strong> {row['Nome']}<br>
+    <strong>Empresa:</strong> {row['Empresa']}<br>
+    <strong>Local:</strong> {row['Cidade']}, {row['UF']}<br>
+    <hr style="margin: 5px 0;">
+    <strong>Especialidades:</strong><br>
+    <div style="max-height: 150px; overflow-y: auto; white-space: pre-wrap; word-wrap: break-word; background-color: #f9f9f9; border: 1px solid #eee; padding: 5px; margin-top: 3px;">{row.get('tooltip_info', 'N/A').replace('**','<b>').replace('**','</b>').replace('\\n','<br>')}</div>
+    </div>
     """
-    # Use get to safely access tooltip_info, provide default if missing
-
     folium.Marker(
         location=[row['Latitude'], row['Longitude']],
-        popup=folium.Popup(popup_html, max_width=350), # Adjust max_width as needed
-        tooltip=f"{row['Nome']} ({row['Cidade']})" # Tooltip on hover
+        popup=folium.Popup(popup_html, max_width=350, min_width=300),
+        tooltip=tooltip_text,
+        icon=folium.Icon(color="blue", icon="wrench", prefix="fa") # Font Awesome wrench icon
     ).add_to(m)
 
-# Display the map
-st_folium(m, width='100%', height=500) # Use st_folium
+# Display the map - Increased height
+# O `returned_objects` é útil se você quiser interagir com o mapa no Python após a exibição
+# mas para apenas exibir, não é estritamente necessário.
+map_data_returned = st_folium(m, width='100%', height=700, returned_objects=[])
+
 
 if df_map.empty and not df_filtered.empty:
-    st.warning("Não foi possível geolocalizar os técnicos filtrados. Verifique os endereços no CSV.")
+    st.warning("Não foi possível geolocalizar os técnicos filtrados. Verifique os endereços ou aguarde a geocodificação (pode levar alguns minutos para novos endereços).")
 elif df_filtered.empty:
     st.info("Nenhum técnico encontrado com os filtros selecionados.")
-
 
 # --- Display Filtered Data Table ---
 st.subheader("Dados dos Técnicos Filtrados")
 st.write(f"Total de técnicos encontrados: {len(df_filtered)}")
-
-# Select and reorder columns for display
 columns_to_display = ['Nome', 'Empresa', 'Cidade', 'UF', 'Mecânica', 'Elétrica', 'Eletrônica', 'Processo']
-# Ensure only existing columns are selected
 columns_to_display = [col for col in columns_to_display if col in df_filtered.columns]
+st.dataframe(df_filtered[columns_to_display], use_container_width=True, height=(min(len(df_filtered) + 1, 10) * 35) + 3)
 
-st.dataframe(df_filtered[columns_to_display], use_container_width=True)
 
-# Optional: Show raw filtered data for debugging or detail
-with st.expander("Ver dados brutos filtrados (inclui coordenadas)"):
+with st.expander("Ver dados brutos filtrados (inclui coordenadas e detalhes de especialidade)"):
     st.dataframe(df_filtered)
 
 # --- Footer/Info ---
 st.sidebar.markdown("---")
-st.sidebar.info("Aplicação desenvolvida para visualização de técnicos.")
+st.sidebar.info("Aplicação Mago para visualização e consulta de técnicos.")
