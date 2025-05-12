@@ -6,25 +6,30 @@ from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
 import time
 import re
+import os # <<< ADICIONE ESTA LINHA NO INÍCIO DO SEU SCRIPT
 
 # --- Page Configuration ---
 st.set_page_config(
     page_title="Mago: Mapa de Técnicos",
-    page_icon=" Mago::globe_with_meridians:", # Use um emoji ou ícone simples se "Mago" não for um ícone padrão
+    page_icon=" Mago::globe_with_meridians:",
     layout="wide"
 )
 
 # --- Data Loading and Caching ---
 @st.cache_data
-def load_data(file_path):
+def load_data(file_path_internal): # Renomeado para evitar conflito de nome
     try:
-        df = pd.read_csv(file_path, encoding='utf-8')
+        df = pd.read_csv(file_path_internal, encoding='utf-8')
     except UnicodeDecodeError:
         try:
-            df = pd.read_csv(file_path, encoding='latin1')
+            df = pd.read_csv(file_path_internal, encoding='latin1')
         except Exception as e:
-            st.error(f"Erro ao ler o CSV: {e}")
+            st.error(f"Erro ao ler o CSV '{file_path_internal}': {e}")
             return pd.DataFrame()
+    except FileNotFoundError: # Captura específica para FileNotFoundError dentro da função
+        st.error(f"DENTRO DE LOAD_DATA: Arquivo '{file_path_internal}' não encontrado.")
+        return pd.DataFrame()
+
 
     df.columns = df.columns.str.strip()
     expertise_cols = ['Mecânica', 'Elétrica', 'Eletrônica', 'Processo']
@@ -40,7 +45,8 @@ def load_data(file_path):
     return df
 
 # --- Geocoding Function with Caching and Rate Limiting ---
-geolocator = Nominatim(user_agent="technician_mapper_app_" + str(time.time()) + "_v2")
+# ... (resto das funções de geocodificação e parse_expertise permanecem iguais) ...
+geolocator = Nominatim(user_agent="technician_mapper_app_" + str(time.time()) + "_v3") # Alterei o user_agent para limpar cache se necessário
 geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.1, error_wait_seconds=10.0, max_retries=2)
 
 @st.cache_data
@@ -48,22 +54,19 @@ def get_coordinates(address):
     if not address or pd.isna(address):
         return None, None
     try:
-        location = geocode(address, timeout=10) # Adicionado timeout
+        location = geocode(address, timeout=10)
         if location:
             return location.latitude, location.longitude
         else:
             state_search = address.split(',')[-1].strip()
-            if state_search and state_search != address: # Evita geocodificar o mesmo se já for só o estado
-                # st.sidebar.caption(f"Tentando geolocalizar apenas estado para: {address}")
+            if state_search and state_search != address:
                 location_state = geocode(state_search, timeout=10)
                 if location_state:
                     return location_state.latitude, location_state.longitude
             return None, None
     except Exception as e:
-        # st.sidebar.caption(f"Geocoding error for '{address}': {e}") # Mais discreto
         return None, None
 
-# --- Helper Functions for Parsing Expertise ---
 def parse_expertise(text):
     if not isinstance(text, str) or not text.strip():
         return {}, []
@@ -95,17 +98,45 @@ def get_all_unique_items(df, expertise_cols):
                 all_machines.update(parsed_machines)
     return sorted(list(all_categories)), sorted(list(all_machines))
 
+
 # --- Main App Logic ---
 st.title(" Mago: Mapeamento e Consulta de Técnicos Parceiros")
 st.markdown("Utilize os filtros na barra lateral para encontrar técnicos por localização ou especialidade.")
 
-file_path = './[AT]TécnicosTerceirosMapa.csv'
-df_original = load_data(file_path)
+# --- DEFINIÇÃO DO CAMINHO DO ARQUIVO ---
+# Certifique-se de que este nome é EXATAMENTE igual ao nome do seu arquivo CSV
+# incluindo maiúsculas/minúsculas, espaços e acentos.
+FILE_NAME = './[AT]TécnicosTerceirosMapa.csv'
+
+# Constrói o caminho absoluto para o arquivo, assumindo que ele está no mesmo diretório do script
+# Isso é mais robusto, especialmente para deploy.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+file_path = os.path.join(BASE_DIR, FILE_NAME)
+
+# --- Verificação da Existência do Arquivo ---
+if not os.path.exists(file_path):
+    st.error(f"ERRO CRÍTICO: O arquivo de dados '{FILE_NAME}' não foi encontrado.")
+    st.error(f"O script está procurando por ele em: '{file_path}'")
+    st.error(f"Por favor, verifique se:")
+    st.error(f"1. O arquivo '{FILE_NAME}' está no MESMO DIRETÓRIO que o seu script Python (`app.py`).")
+    st.error(f"2. O nome do arquivo no script está EXATAMENTE IGUAL ao nome do seu arquivo (cuidado com letras maiúsculas/minúsculas, espaços e acentos como 'é', 'ã', 'ç').")
+    st.info(f"Conteúdo do diretório atual ({BASE_DIR}):")
+    try:
+        st.write(os.listdir(BASE_DIR))
+    except Exception as e:
+        st.write(f"Não foi possível listar o conteúdo do diretório: {e}")
+    st.stop() # Para a execução do script se o arquivo não for encontrado
+
+df_original = load_data(file_path) # Agora passamos o file_path absoluto
 
 if df_original.empty:
+    st.warning("O DataFrame está vazio após tentar carregar os dados. Verifique se o arquivo CSV tem conteúdo ou se houve erros durante o carregamento.")
     st.stop()
 
 # --- Sidebar Filters ---
+# ... (o resto do seu código para filtros, geocodificação de dados filtrados, mapa, etc., continua aqui)
+# Certifique-se de que nenhuma outra parte do código está redefinindo 'file_path' para um valor relativo problemático.
+
 st.sidebar.header("Filtros")
 states = sorted(df_original['UF'].dropna().unique())
 all_expertise_areas = ['Mecânica', 'Elétrica', 'Eletrônica', 'Processo']
@@ -139,7 +170,7 @@ def check_expertise(row, area, category, machine):
 
     for col_name in expertise_cols_to_check:
         if col_name in row and pd.notna(row[col_name]) and row[col_name].strip():
-            text = str(row[col_name]) # Garantir que é string
+            text = str(row[col_name])
             full_text_for_tooltip.append(f"**{col_name}:**\n{text}")
 
             if area != "Todas" and category == "Todas" and machine == "Todas":
@@ -168,7 +199,7 @@ if selected_area != "Todas" or selected_category != "Todas" or selected_machine 
         axis=1
     )
     df_filtered[['match', 'tooltip_info']] = expertise_check_results
-    df_filtered = df_filtered[df_filtered['match'] == True].drop(columns=['match']) # Remove a coluna 'match' após filtrar
+    df_filtered = df_filtered[df_filtered['match'] == True].drop(columns=['match'])
 else:
     df_filtered['tooltip_info'] = df_filtered.apply(
         lambda row: "\n\n".join([f"**{col}:**\n{str(row[col])}" for col in all_expertise_areas if col in row and pd.notna(row[col]) and str(row[col]).strip()] or ["Nenhuma especialidade detalhada."]),
@@ -180,7 +211,6 @@ if 'Latitude' not in df_filtered.columns or 'Longitude' not in df_filtered.colum
     df_filtered['Latitude'] = pd.NA
     df_filtered['Longitude'] = pd.NA
 
-# Convert to numeric, coercing errors to NaT/NaN, then check for actual NaNs
 df_filtered['Latitude'] = pd.to_numeric(df_filtered['Latitude'], errors='coerce')
 df_filtered['Longitude'] = pd.to_numeric(df_filtered['Longitude'], errors='coerce')
 
@@ -202,83 +232,51 @@ if not rows_to_geocode_indices.empty:
         if lat is not None and lon is not None:
             coordinates_lat[idx] = lat
             coordinates_lon[idx] = lon
-        else: # Store NaN if geocoding fails
-             coordinates_lat[idx] = pd.NA
-             coordinates_lon[idx] = pd.NA
+        else:
+            coordinates_lat[idx] = pd.NA
+            coordinates_lon[idx] = pd.NA
         progress_bar.progress((i + 1) / len(rows_to_geocode_indices))
     
-    # Update DataFrame
     df_filtered.loc[coordinates_lat.keys(), 'Latitude'] = pd.Series(coordinates_lat)
     df_filtered.loc[coordinates_lon.keys(), 'Longitude'] = pd.Series(coordinates_lon)
     
-    # Persist these new coordinates back to the original dataframe in memory for caching
-    # This part can be tricky if df_original is deeply cached and not mutable directly
-    # For simplicity here, we assume df_original is the one being updated through df_filtered's lifecycle
-    # A more robust solution for full persistence across sessions would involve saving to a file.
+    # Atualizar df_original também para persistir geocodificações na sessão
+    # Isso é uma simplificação. Para persistência real entre execuções, seria necessário salvar o df_original.
     df_original.update(df_filtered[['Latitude', 'Longitude']])
-
 
     progress_bar.empty()
 
 # --- Display Map ---
 st.subheader("Mapa de Técnicos")
-
-# Brazil bounding box (approximate)
-# SW corner: (-33.75158, -73.98283) - Southernmost point of RS, Westernmost point of AC
-# NE corner: (5.27189, -28.84376) - Northernmost point of RR, Easternmost point of PB (Ponta do Seixas is actually -34.79, but for tiles -28 is fine)
-brazil_bounds = [
-    [-33.75, -73.99],  # Southwest
-    [5.28, -34.70]     # Northeast
-]
-
-# Initial map center and zoom
-map_center_br = [-14.2350, -51.9253] # Center of Brazil
-zoom_start_br = 4 # Good zoom level to see most of Brazil
+brazil_bounds = [[-33.75, -73.99], [5.28, -34.70]]
+map_center_br = [-14.2350, -51.9253]
+zoom_start_br = 4
 
 df_map = df_filtered.dropna(subset=['Latitude', 'Longitude'])
-
 current_map_center = map_center_br
 current_zoom = zoom_start_br
 
 if not df_map.empty:
-    # If there are filtered points, center on them
     current_map_center = [df_map['Latitude'].mean(), df_map['Longitude'].mean()]
-    # Simple zoom adjustment based on point spread
     lat_std = df_map['Latitude'].std()
     lon_std = df_map['Longitude'].std()
-    if pd.notna(lat_std) and pd.notna(lon_std) and lat_std < 0.5 and lon_std < 0.5 and len(df_map) == 1: # Very focused on one point
+    if pd.notna(lat_std) and pd.notna(lon_std) and lat_std < 0.5 and lon_std < 0.5 and len(df_map) == 1:
         current_zoom = 12
-    elif pd.notna(lat_std) and pd.notna(lon_std) and lat_std < 2 and lon_std < 2: # Moderately focused
+    elif pd.notna(lat_std) and pd.notna(lon_std) and lat_std < 2 and lon_std < 2:
         current_zoom = 7
     elif pd.notna(lat_std) and pd.notna(lon_std) and lat_std < 5 and lon_std < 5:
         current_zoom = 5
     else:
-        current_zoom = zoom_start_br # Default back to Brazil view if points are very spread out
+        current_zoom = zoom_start_br
 
-# --- Choose your map theme here ---
-# Options:
-# "OpenStreetMap"
-# "CartoDB positron" (clean, good for data overlays)
-# "CartoDB dark_matter" (dark theme)
-# "Stamen Terrain" (shows topography)
-# "Stamen Toner" (high contrast B&W)
-# "Esri_WorldImagery" (satellite)
-# "Esri_NatGeoWorldMap" (National Geographic style - recommended for attractive & informative)
 selected_tile = "Esri_NatGeoWorldMap"
-# selected_tile = "Stamen Terrain" # Alternative good option
-
 m = folium.Map(
     location=current_map_center,
     zoom_start=current_zoom,
     tiles=selected_tile,
-    attr='Tiles © Esri — National Geographic, Esri, DeLorme, NAVTEQ, UNEP-WCMC, USGS, NASA, ESA, METI, NRCAN, GEBCO, NOAA, iPC' if selected_tile == "Esri_NatGeoWorldMap" else None, # Add attribution if needed
-    # max_bounds=brazil_bounds, # Restrict panning (can be slightly improved with precise bounds)
-    # min_zoom=3, # Prevent zooming out too far
-    control_scale=True # Adds a scale bar
+    attr='Tiles © Esri — National Geographic, Esri, DeLorme, NAVTEQ, UNEP-WCMC, USGS, NASA, ESA, METI, NRCAN, GEBCO, NOAA, iPC' if selected_tile == "Esri_NatGeoWorldMap" else None,
+    control_scale=True
 )
-
-# Optional: If you want to strictly keep the map within Brazil bounds
-# m.fit_bounds(brazil_bounds) # This will zoom to fit the bounds
 
 for idx, row in df_map.iterrows():
     tooltip_text = f"{row['Nome']} ({row['Cidade']})"
@@ -296,17 +294,13 @@ for idx, row in df_map.iterrows():
         location=[row['Latitude'], row['Longitude']],
         popup=folium.Popup(popup_html, max_width=350, min_width=300),
         tooltip=tooltip_text,
-        icon=folium.Icon(color="blue", icon="wrench", prefix="fa") # Font Awesome wrench icon
+        icon=folium.Icon(color="blue", icon="wrench", prefix="fa")
     ).add_to(m)
 
-# Display the map - Increased height
-# O `returned_objects` é útil se você quiser interagir com o mapa no Python após a exibição
-# mas para apenas exibir, não é estritamente necessário.
 map_data_returned = st_folium(m, width='100%', height=700, returned_objects=[])
 
-
 if df_map.empty and not df_filtered.empty:
-    st.warning("Não foi possível geolocalizar os técnicos filtrados. Verifique os endereços ou aguarde a geocodificação (pode levar alguns minutos para novos endereços).")
+    st.warning("Não foi possível geolocalizar os técnicos filtrados. Verifique os endereços ou aguarde a geocodificação.")
 elif df_filtered.empty:
     st.info("Nenhum técnico encontrado com os filtros selecionados.")
 
@@ -316,7 +310,6 @@ st.write(f"Total de técnicos encontrados: {len(df_filtered)}")
 columns_to_display = ['Nome', 'Empresa', 'Cidade', 'UF', 'Mecânica', 'Elétrica', 'Eletrônica', 'Processo']
 columns_to_display = [col for col in columns_to_display if col in df_filtered.columns]
 st.dataframe(df_filtered[columns_to_display], use_container_width=True, height=(min(len(df_filtered) + 1, 10) * 35) + 3)
-
 
 with st.expander("Ver dados brutos filtrados (inclui coordenadas e detalhes de especialidade)"):
     st.dataframe(df_filtered)
